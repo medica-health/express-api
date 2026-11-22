@@ -1,48 +1,31 @@
 import "dotenv/config"; // must be first: loads .env before config modules read process.env
-import express from "express";
-import cors from "cors";
-import helmet from "helmet";
-import morgan from "morgan";
-import { connectMongo, disconnectMongo, mongoStatus } from "./config/mongo";
-import { connectPostgres, disconnectPostgres, postgresStatus } from "./config/postgres";
-
-const app = express();
-
-app.use(helmet());
-app.use(cors({ origin: (process.env.CORS_ORIGINS || "http://localhost:3000").split(",") }));
-app.use(express.json());
-app.use(morgan("dev"));
-
-const PORT = process.env.PORT || 5000;
-const ENV = process.env.NODE_ENV || "development";
-
-app.get("/api/health", async (_req, res) => {
-  const [postgres, mongodb] = await Promise.all([postgresStatus(), mongoStatus()]);
-  res.status(200).json({
-    success: true,
-    message: "API is running successfully",
-    data: {
-      environment: ENV,
-      databases: { postgres, mongodb },
-    },
-    timestamp: new Date().toISOString(),
-  });
-});
-
-app.get("/", (_req, res) => {
-  res.status(200).json({
-    message: "Running",
-  });
-});
+import { createApp } from "./app";
+import { env } from "./config/env";
+import { connectMongo, disconnectMongo } from "./config/mongo";
+import { connectPostgres, disconnectPostgres } from "./config/postgres";
+import { runMigrations } from "./db/migrate";
+import { startJobs, stopJobs } from "./jobs/reminders";
 
 async function start() {
   await Promise.all([connectMongo(), connectPostgres()]);
 
-  const server = app.listen(PORT, () => {
-    console.log(`API running on http://localhost:${PORT}`);
+  // Migrations need Postgres and spring-api's auth schema. A failure is logged rather than
+  // fatal, matching the existing "DB down is not fatal" behaviour; /api/health shows DB state.
+  try {
+    await runMigrations();
+  } catch (err) {
+    console.error("Database migrations failed:", (err as Error).message);
+  }
+
+  if (env.JOBS_ENABLED) startJobs();
+
+  const app = createApp();
+  const server = app.listen(env.PORT, () => {
+    console.log(`API running on http://localhost:${env.PORT}`);
   });
 
   const shutdown = async () => {
+    stopJobs();
     server.close();
     await Promise.allSettled([disconnectMongo(), disconnectPostgres()]);
     process.exit(0);
