@@ -22,7 +22,7 @@ import type {
 import { assertCanManageDoctor, assignedDoctorIds, isAssignedReceptionist } from "./access.service";
 import { audit } from "./audit.service";
 import { busyIntervals, candidateSlots } from "./doctors.service";
-import { notifyBooked, notifyCancelled, notifyRescheduled } from "./notifications.service";
+import { notify, notifyBooked, notifyCancelled, notifyRescheduled } from "./notifications.service";
 import { invalidateDoctorSlots } from "./slotCache.service";
 import { assertNotHeldByOthers, createHold, getHold, releaseHold } from "./slotHolds.service";
 import { requireUserWithRole } from "./users.service";
@@ -303,4 +303,22 @@ export async function rescheduleAppointment(user: AuthUser, id: string, body: Re
   audit(user, "APPOINTMENT_RESCHEDULED", "appointment", id, { startAt: body.startAt });
   notifyRescheduled(id);
   return detail(id, user);
+}
+
+/**
+ * Re-sends the booking confirmation to the patient (email or SMS, whichever they use).
+ * Reschedules aren't tracked separately, so this always sends the BOOKED message.
+ */
+export async function resendConfirmation(
+  user: AuthUser,
+  id: string,
+  deps: { db?: Queryable; notify?: typeof notify } = {},
+): Promise<{ appointmentId: string }> {
+  const { db = pool, notify: send = notify } = deps;
+  const appt = await loadVisible(user, id, db);
+  if (user.role !== "PATIENT") await assertCanManageDoctor(user, appt.doctor_id, db);
+  if (!isActive(appt.status)) throw AppError.conflict("Only upcoming appointments can be re-confirmed");
+  await send(id, "BOOKED", { patientOnly: true });
+  audit(user, "APPOINTMENT_CONFIRMATION_RESENT", "appointment", id);
+  return { appointmentId: id };
 }

@@ -24,6 +24,7 @@ const BOOKERS = requireRole("PATIENT", "RECEPTIONIST", "ADMIN");
 // so the limits are generous; they stop scripts hammering the slot inventory.
 const bookingLimit = rateLimit({ name: "book", limit: 20, windowSeconds: 60 });
 const holdLimit = rateLimit({ name: "hold", limit: 30, windowSeconds: 60 });
+const resendLimit = rateLimit({ name: "resend", limit: 3, windowSeconds: 3600 });
 const changeLimit = rateLimit({ name: "change", limit: 20, windowSeconds: 60 });
 
 // Slot holds: reserve a slot for a few minutes while confirming. Must come before /:id.
@@ -50,6 +51,13 @@ router.post(
   changeLimit,
   validate({ params: idParam, body: rescheduleBody }),
   c.reschedule,
+);
+router.post(
+  "/:id/resend-confirmation",
+  BOOKERS,
+  resendLimit,
+  validate({ params: idParam }),
+  c.resendConfirmation,
 );
 
 // Prescription for an appointment: written by its doctor, readable by the patient and treating doctors.
