@@ -1,6 +1,7 @@
 import { Resend } from "resend";
 import { env } from "../config/env";
 import { query } from "../db";
+import { isPhonePlaceholder } from "../utils/phonePatient";
 
 // Transactional email through Resend (https://resend.com).
 // With RESEND_API_KEY unset (local dev, tests) emails are logged and recorded as SKIPPED.
@@ -68,25 +69,53 @@ export async function deliver(mail: Mail, maxAttempts = 3): Promise<DeliveryResu
   return { status: "FAILED", providerMessageId: null, error: lastError };
 }
 
-// Sends and records the outcome in app.notifications_log. Never throws:
-// notification problems must not fail the request that triggered them.
-export async function sendMail(mail: Mail): Promise<void> {
-  const result = await deliver(mail);
+export interface LogEntry {
+  userId?: string;
+  appointmentId?: string;
+  type: string;
+  channel: "EMAIL" | "SMS";
+  recipient: string;
+  subject: string;
+  result: DeliveryResult;
+}
+
+/** Writes one row to app.notifications_log. Never throws. */
+export async function insertNotificationLog(e: LogEntry): Promise<void> {
   await query(
     `INSERT INTO app.notifications_log
-       (user_id, appointment_id, type, recipient, subject, status, error, provider_message_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+       (user_id, appointment_id, type, channel, recipient, subject, status, error, provider_message_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
     [
-      mail.userId ?? null,
-      mail.appointmentId ?? null,
-      mail.type,
-      mail.to,
-      mail.subject,
-      result.status,
-      result.error,
-      result.providerMessageId,
+      e.userId ?? null,
+      e.appointmentId ?? null,
+      e.type,
+      e.channel,
+      e.recipient,
+      e.subject,
+      e.result.status,
+      e.result.error,
+      e.result.providerMessageId,
     ],
   ).catch((err: Error) => console.error("notifications_log insert failed:", err.message));
+}
+
+// Sends and records the outcome in app.notifications_log. Never throws:
+// notification problems must not fail the request that triggered them.
+// Phone-registered patients have a placeholder address that can't receive mail: record, don't send.
+// `log` is injectable so tests don't need a database.
+export async function sendMail(mail: Mail, log: (e: LogEntry) => Promise<void> = insertNotificationLog): Promise<void> {
+  const result: DeliveryResult = isPhonePlaceholder(mail.to)
+    ? { status: "SKIPPED", providerMessageId: null, error: "placeholder address" }
+    : await deliver(mail);
+  await log({
+    userId: mail.userId,
+    appointmentId: mail.appointmentId,
+    type: mail.type,
+    channel: "EMAIL",
+    recipient: mail.to,
+    subject: mail.subject,
+    result,
+  });
 }
 
 const escape = (s: string) =>

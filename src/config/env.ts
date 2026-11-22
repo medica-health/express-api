@@ -20,6 +20,13 @@ const schema = z.object({
   MAIL_REPLY_TO: z.string().optional().default(""),
   APP_BASE_URL: z.string().default("http://localhost:3000"),
 
+  // SMS via Twilio for phone-registered patients. Empty SID/token = SMS is only logged (SKIPPED).
+  // Set TWILIO_MESSAGING_SERVICE_SID (preferred) or TWILIO_SMS_FROM as the sender.
+  TWILIO_ACCOUNT_SID: z.string().optional().default(""),
+  TWILIO_AUTH_TOKEN: z.string().optional().default(""),
+  TWILIO_SMS_FROM: z.string().optional().default(""),
+  TWILIO_MESSAGING_SERVICE_SID: z.string().optional().default(""),
+
   // Redis (optional): slot holds, free-slot cache, rate limiting. Empty = those features are off.
   REDIS_URL: z.string().optional().default(""),
   // How long a patient can hold a slot while confirming the booking.

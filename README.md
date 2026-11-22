@@ -9,6 +9,8 @@ Domain API for the MediCare online doctor appointment system: doctor discovery (
   - **MongoDB** stores medical-record files (GridFS bucket `medical_records`) and the `audit_logs` collection.
 - **Redis** (optional): slot holds, the free-slot cache and rate limiting. See [Slot booking and Redis](#slot-booking-and-redis).
 - **Email:** sent via **Resend** (`resend` SDK) for bookings, cancellations, reschedules, doctor verification and 24-hour reminders. Reminders use Resend idempotency keys, rate-limit errors are retried with backoff, and every attempt is logged in `app.notifications_log` with the Resend message id. Without `RESEND_API_KEY`, emails are only logged (status `SKIPPED`).
+- **SMS:** patients registered by the phone receptionist have a placeholder email (`p-<24 hex>@phone.medicare.invalid`, see `utils/phonePatient.ts`). They get booked/cancelled/rescheduled/reminder notifications by **SMS via Twilio** (`services/sms.service.ts`, called with `fetch`, 429/5xx retried with backoff) instead of email; mail to a placeholder address is never sent (logged `SKIPPED`). Everyone else keeps email. Env: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_MESSAGING_SERVICE_SID` or `TWILIO_SMS_FROM`; without SID/token SMS is only logged (`SKIPPED`). `notifications_log.channel` is `EMAIL` or `SMS`.
+- **Receptionist DB role:** migration `004` creates the `receptionist_ro` role (NOLOGIN) with column-level SELECT on `auth.users` (`id, email, full_name, phone, role, enabled`) and `app.patient_profiles` (`user_id, date_of_birth`). The password and LOGIN are set per environment, never in a migration.
 
 ## Running locally
 
