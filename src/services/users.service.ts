@@ -19,7 +19,8 @@ export async function findUserById(id: string, db?: Queryable): Promise<UserRow 
 }
 
 export async function findUserByEmail(email: string, db?: Queryable): Promise<UserRow | undefined> {
-  return queryOne<UserRow>(`SELECT ${COLUMNS} FROM auth.users WHERE email = $1`, [email], db);
+  // auth.users.email is stored lower-case (CHECK constraint in spring-api's V1 migration)
+  return queryOne<UserRow>(`SELECT ${COLUMNS} FROM auth.users WHERE email = lower($1)`, [email.trim()], db);
 }
 
 /** Loads an enabled user with the given role, or throws 404. */
