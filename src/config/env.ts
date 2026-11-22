@@ -12,12 +12,12 @@ const schema = z.object({
   JWT_ISSUER: z.string().default("cdac-auth"),
   JWT_AUDIENCE: z.string().default("cdac-api"),
 
-  // Email (optional: if SMTP_HOST is empty, emails are logged instead of sent)
-  SMTP_HOST: z.string().optional().default(""),
-  SMTP_PORT: z.coerce.number().int().positive().default(1025),
-  SMTP_USER: z.string().optional().default(""),
-  SMTP_PASSWORD: z.string().optional().default(""),
-  MAIL_FROM: z.string().default("MediCare <no-reply@cdac.local>"),
+  // Email via Resend. Leave RESEND_API_KEY empty to only log emails (dev/tests).
+  // MAIL_FROM must use a domain verified in Resend; onboarding@resend.dev only delivers to
+  // the Resend account owner's address (useful for a first test).
+  RESEND_API_KEY: z.string().optional().default(""),
+  MAIL_FROM: z.string().default("MediCare <onboarding@resend.dev>"),
+  MAIL_REPLY_TO: z.string().optional().default(""),
   APP_BASE_URL: z.string().default("http://localhost:3000"),
 
   // Background jobs (reminder emails). Disable in tests or extra replicas if desired.

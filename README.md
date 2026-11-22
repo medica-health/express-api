@@ -7,7 +7,7 @@ Domain API for the MediCare online doctor appointment system: doctor discovery (
 - **Data:**
   - **PostgreSQL + PostGIS** is the main database. This service owns the `app` schema and only reads `auth.users`, which `spring-api` owns.
   - **MongoDB** stores medical-record files (GridFS bucket `medical_records`) and the `audit_logs` collection.
-- **Email:** sent over SMTP (Mailpit locally) for bookings, cancellations, reschedules, doctor verification and 24-hour reminders.
+- **Email:** sent via **Resend** (`resend` SDK) for bookings, cancellations, reschedules, doctor verification and 24-hour reminders. Reminders use Resend idempotency keys, rate-limit errors are retried with backoff, and every attempt is logged in `app.notifications_log` with the Resend message id. Without `RESEND_API_KEY`, emails are only logged (status `SKIPPED`).
 
 ## Running locally
 
@@ -17,7 +17,7 @@ cp .env.example .env        # then set JWT_SECRET (same value as spring-api)
 bun run dev                 # http://localhost:5000
 ```
 
-The full stack (PostGIS, Mongo, Mailpit, both APIs, client) runs from the workspace root:
+The full stack (PostGIS, Mongo, both APIs, client) runs from the workspace root:
 
 ```bash
 docker compose -f .github/docker-compose.yml --project-directory . up --build

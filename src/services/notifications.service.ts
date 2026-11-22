@@ -76,6 +76,8 @@ async function notify(appointmentId: string, event: Event): Promise<void> {
       type: `APPOINTMENT_${event}`,
       userId: a.patient_id,
       appointmentId: a.id,
+      // One reminder per appointment time, even if the sweep is retried or races another pod.
+      ...(event === "REMINDER" ? { idempotencyKey: `reminder/${a.id}/${a.start_at.getTime()}` } : {}),
     }),
   ];
 
