@@ -1,0 +1,28 @@
+version: '3.8'
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - NODE_ENV=production
+      - MONGO_URI=mongodb://mongo:27017/cdac_db
+    depends_on:
+      - mongo
+    volumes:
+      - .:/usr/src/app
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:5.0
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=root
+      - MONGO_INITDB_ROOT_PASSWORD=example
+    restart: unless-stopped
+
+volumes:
+  mongo_data:

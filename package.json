@@ -1,0 +1,43 @@
+{
+  "name": "express-api",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "bun --watch src/server.ts",
+    "build": "tsc",
+    "start": "bun dist/server.js",
+    "docker:build": "docker build -t express-api .",
+    "docker:run": "docker run -p 3000:3000 express-api",
+    "docker:compose:up": "docker-compose up -d",
+    "docker:compose:down": "docker-compose down",
+    "docker:compose:build": "docker-compose build",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/bun": "latest",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/morgan": "^1.9.10",
+    "@types/node": "^26.6.6",
+    "@types/pg": "^8.23.1",
+    "eslint": "^10.14.0",
+    "globals": "^17.14.0",
+    "nodemon": "^3.1.14",
+    "typescript-eslint": "^8.72.1"
+  },
+  "peerDependencies": {
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.9",
+    "express": "^5.3.0",
+    "helmet": "^8.3.0",
+    "mongoose": "^9.12.3",
+    "morgan": "^1.12.1",
+    "pg": "^8.23.1"
+  }
+}
