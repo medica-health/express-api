@@ -7,13 +7,17 @@
     "build": "bun node_modules/@typescript/native/bin/tsc",
     "start": "bun dist/server.js",
     "docker:build": "docker build -t express-api .",
-    "docker:run": "docker run -p 3000:3000 express-api",
+    "docker:run": "docker run -p 5000:5000 --env-file .env express-api",
     "docker:compose:up": "docker-compose up -d",
     "docker:compose:down": "docker-compose down",
     "docker:compose:build": "docker-compose build",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "typecheck": "bun node_modules/@typescript/native/bin/tsc --noEmit"
+    "typecheck": "bun node_modules/@typescript/native/bin/tsc --noEmit",
+    "test": "bun test",
+    "migrate": "bun src/scripts/migrate.ts",
+    "seed": "bun src/scripts/seed.ts",
+    "token": "bun src/scripts/dev-token.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -21,6 +25,7 @@
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/morgan": "^1.9.10",
+    "@types/multer": "^2.3.0",
     "@types/node": "^26.6.6",
     "@types/pg": "^8.23.1",
     "@typescript/native": "npm:typescript@^7.0.2",
@@ -35,8 +40,14 @@
     "dotenv": "^18.0.9",
     "express": "^5.3.0",
     "helmet": "^8.3.0",
+    "ioredis": "^6.0.0",
+    "jose": "^6.2.18",
     "mongoose": "^9.12.3",
     "morgan": "^1.12.1",
-    "pg": "^8.23.1"
+    "multer": "^2.5.0",
+    "node-cron": "^4.6.0",
+    "pg": "^8.23.1",
+    "resend": "^6.39.0",
+    "zod": "^4.6.7"
   }
 }
