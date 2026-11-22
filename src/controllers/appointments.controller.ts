@@ -59,7 +59,8 @@ export async function reschedule(req: Request, res: Response) {
 }
 
 export async function resendConfirmation(req: Request, res: Response) {
-  ok(res, "Confirmation resent", await appointments.resendConfirmation(currentUser(req), idOf(res)));
+  const data = await appointments.resendConfirmation(currentUser(req), idOf(res));
+  ok(res, data.sent ? "Confirmation resent" : "Confirmation could not be sent right now", data);
 }
 
 export async function writePrescription(req: Request, res: Response) {

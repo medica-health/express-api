@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { describe, expect, mock, spyOn, test } from "bun:test";
 import { resendConfirmation } from "../services/appointments.service";
 import type { AuthUser } from "../types/auth";
 
@@ -31,7 +31,24 @@ describe("resendConfirmation", () => {
   test("booked appointment resends BOOKED to the patient only", async () => {
     const send = mock(async () => {});
     const out = await resendConfirmation(patient, "a-1", { db: fakeDb({ ...APPT, status: "BOOKED" }), notify: send });
-    expect(out).toEqual({ appointmentId: "a-1" });
+    expect(out).toEqual({ appointmentId: "a-1", sent: true });
     expect(send).toHaveBeenCalledWith("a-1", "BOOKED", { patientOnly: true });
+  });
+
+  test("a failing send still resolves with sent:false and audits", async () => {
+    const send = mock(async () => {
+      throw new Error("boom");
+    });
+    const logAudit = mock(() => {});
+    const err = spyOn(console, "error").mockImplementation(() => {});
+    const out = await resendConfirmation(patient, "a-1", {
+      db: fakeDb({ ...APPT, status: "BOOKED" }),
+      notify: send,
+      audit: logAudit,
+    });
+    expect(out).toEqual({ appointmentId: "a-1", sent: false });
+    expect(logAudit).toHaveBeenCalledTimes(1);
+    expect(err).toHaveBeenCalledWith("Resend confirmation failed:", "boom");
+    err.mockRestore();
   });
 });

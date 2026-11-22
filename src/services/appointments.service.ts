@@ -312,13 +312,20 @@ export async function rescheduleAppointment(user: AuthUser, id: string, body: Re
 export async function resendConfirmation(
   user: AuthUser,
   id: string,
-  deps: { db?: Queryable; notify?: typeof notify } = {},
-): Promise<{ appointmentId: string }> {
-  const { db = pool, notify: send = notify } = deps;
+  deps: { db?: Queryable; notify?: typeof notify; audit?: typeof audit } = {},
+): Promise<{ appointmentId: string; sent: boolean }> {
+  const { db = pool, notify: send = notify, audit: log = audit } = deps;
   const appt = await loadVisible(user, id, db);
   if (user.role !== "PATIENT") await assertCanManageDoctor(user, appt.doctor_id, db);
   if (!isActive(appt.status)) throw AppError.conflict("Only upcoming appointments can be re-confirmed");
-  await send(id, "BOOKED", { patientOnly: true });
-  audit(user, "APPOINTMENT_CONFIRMATION_RESENT", "appointment", id);
-  return { appointmentId: id };
+  // Notification problems must never fail the request: report them via `sent` instead.
+  let sent = true;
+  try {
+    await send(id, "BOOKED", { patientOnly: true });
+  } catch (err) {
+    sent = false;
+    console.error("Resend confirmation failed:", (err as Error).message);
+  }
+  log(user, "APPOINTMENT_CONFIRMATION_RESENT", "appointment", id, { sent });
+  return { appointmentId: id, sent };
 }
