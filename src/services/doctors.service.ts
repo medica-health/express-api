@@ -2,6 +2,8 @@ import { query, queryOne, type Queryable } from "../db";
 import { filterAvailableSlots, type Interval, type Slot } from "../policies/slots";
 import type { AuthUser } from "../types/auth";
 import { AppError } from "../utils/AppError";
+import { cachedSlots, invalidateDoctorSlots } from "./slotCache.service";
+import { heldIntervals } from "./slotHolds.service";
 import { LAT_LNG_SQL, POINT_SQL } from "../utils/geo";
 import { offsetOf, paged } from "../utils/pagination";
 import { SqlBuilder } from "../utils/sql";
@@ -253,19 +255,36 @@ export async function busyIntervals(
   return rows.map((r) => ({ startAt: r.start_at, endAt: r.end_at }));
 }
 
-export async function availableSlots(doctorId: string, date: string, clinicId?: string) {
-  const doctor = await queryOne<{ verification_status: string }>(
-    "SELECT verification_status FROM app.doctor_profiles WHERE user_id = $1",
-    [doctorId],
-  );
-  if (!doctor || doctor.verification_status !== "APPROVED") throw AppError.notFound("Doctor not found");
-
+async function computeFreeSlots(doctorId: string, date: string, clinicId?: string): Promise<Slot[]> {
   const candidates = await candidateSlots(doctorId, date, clinicId);
   if (!candidates.length) return [];
   const from = new Date(Math.min(...candidates.map((s) => s.startAt.getTime())));
   const to = new Date(Math.max(...candidates.map((s) => s.endAt.getTime())));
   const busy = await busyIntervals(doctorId, from, to);
   return filterAvailableSlots(candidates, busy);
+}
+
+/**
+ * Free slots for a date (cached in Redis), each flagged `held` when another user currently
+ * holds it. A viewer's own hold is not flagged, so they can still book it.
+ */
+export async function availableSlots(doctorId: string, date: string, clinicId?: string, viewer?: AuthUser) {
+  const doctor = await queryOne<{ verification_status: string }>(
+    "SELECT verification_status FROM app.doctor_profiles WHERE user_id = $1",
+    [doctorId],
+  );
+  if (!doctor || doctor.verification_status !== "APPROVED") throw AppError.notFound("Doctor not found");
+
+  const free = await cachedSlots(doctorId, date, clinicId, () => computeFreeSlots(doctorId, date, clinicId));
+  if (!free.length) return [];
+
+  const from = free[0]!.startAt;
+  const to = new Date(Math.max(...free.map((s) => s.endAt.getTime())));
+  const holds = (await heldIntervals(doctorId, from, to)).filter((h) => h.holderId !== viewer?.id);
+  return free.map((s) => {
+    const hold = holds.find((h) => h.startAt < s.endAt && s.startAt < h.endAt);
+    return { ...s, held: Boolean(hold), heldUntil: hold?.expiresAt ?? null };
+  });
 }
 
 /** Admin/doctor: link or unlink a doctor and a clinic. */
@@ -277,6 +296,7 @@ export async function linkClinic(doctorId: string, clinicId: string) {
     "INSERT INTO app.doctor_clinics (doctor_id, clinic_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
     [doctorId, clinicId],
   );
+  await invalidateDoctorSlots(doctorId);
   return clinicsOfDoctor(doctorId);
 }
 
@@ -290,5 +310,6 @@ export async function unlinkClinic(doctorId: string, clinicId: string) {
   if (upcoming) throw AppError.conflict("Cancel or move upcoming appointments at this clinic first");
   await query("DELETE FROM app.doctor_availability WHERE doctor_id = $1 AND clinic_id = $2", [doctorId, clinicId]);
   await query("DELETE FROM app.doctor_clinics WHERE doctor_id = $1 AND clinic_id = $2", [doctorId, clinicId]);
+  await invalidateDoctorSlots(doctorId);
   return clinicsOfDoctor(doctorId);
 }

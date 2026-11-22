@@ -13,6 +13,16 @@ export const bookAppointmentBody = z.object({
 });
 export type BookAppointmentBody = z.infer<typeof bookAppointmentBody>;
 
+// Temporarily hold a slot while the patient confirms (Redis). Same slot rules as booking.
+export const holdSlotBody = z.object({
+  doctorId: id,
+  clinicId: id,
+  startAt: isoDateTime,
+});
+export type HoldSlotBody = z.infer<typeof holdSlotBody>;
+
+export const holdIdParam = z.object({ holdId: id });
+
 export const listAppointmentsQuery = paginationSchema.extend({
   status: z
     .string()

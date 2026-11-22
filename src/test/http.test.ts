@@ -93,6 +93,21 @@ describe("role gates", () => {
     expect(status).toBe(403);
   });
 
+  test("doctors cannot hold slots, and hold bodies are validated", async () => {
+    const forbidden = await call("/api/appointments/holds", {
+      method: "POST",
+      bearer: await token("DOCTOR"),
+      body: JSON.stringify({}),
+    });
+    expect(forbidden.status).toBe(403);
+    const invalid = await call("/api/appointments/holds", {
+      method: "POST",
+      bearer: await token("PATIENT"),
+      body: JSON.stringify({ doctorId: "nope" }),
+    });
+    expect(invalid.status).toBe(400);
+  });
+
   test("patients cannot change appointment status", async () => {
     const { status } = await call("/api/appointments/00000000-0000-4000-8000-000000000009/status", {
       method: "PATCH",

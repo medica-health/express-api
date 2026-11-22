@@ -2,6 +2,7 @@ import { query, queryOne } from "../db";
 import { AppError } from "../utils/AppError";
 import type { AvailabilityBody, TimeOffBody } from "../validators/doctors";
 import { ensureDoctorProfile } from "./doctors.service";
+import { invalidateDoctorSlots } from "./slotCache.service";
 
 // Weekly availability rules and time off. Callers have already checked
 // assertCanManageDoctor(user, doctorId).
@@ -46,6 +47,7 @@ export async function createAvailability(doctorId: string, body: AvailabilityBod
      VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
     [doctorId, body.clinicId, body.dayOfWeek, body.startTime, body.endTime, body.slotMinutes, body.isActive],
   );
+  await invalidateDoctorSlots(doctorId);
   return getAvailability(doctorId, row!.id);
 }
 
@@ -59,6 +61,7 @@ export async function updateAvailability(doctorId: string, id: string, body: Ava
       WHERE doctor_id = $1 AND id = $2`,
     [doctorId, id, body.clinicId, body.dayOfWeek, body.startTime, body.endTime, body.slotMinutes, body.isActive],
   );
+  await invalidateDoctorSlots(doctorId);
   return getAvailability(doctorId, id);
 }
 
@@ -68,6 +71,7 @@ export async function deleteAvailability(doctorId: string, id: string) {
     id,
   ]);
   if (!row) throw AppError.notFound("Availability rule not found");
+  await invalidateDoctorSlots(doctorId);
 }
 
 // ------------------------------------------------------------------ time off
@@ -102,6 +106,7 @@ export async function createTimeOff(doctorId: string, body: TimeOffBody) {
       ORDER BY a.start_at`,
     [doctorId, body.startsAt, body.endsAt],
   );
+  await invalidateDoctorSlots(doctorId);
   return { timeOff: row, conflicts };
 }
 
@@ -111,4 +116,5 @@ export async function deleteTimeOff(doctorId: string, id: string) {
     id,
   ]);
   if (!row) throw AppError.notFound("Time off not found");
+  await invalidateDoctorSlots(doctorId);
 }

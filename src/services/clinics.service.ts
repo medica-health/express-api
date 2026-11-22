@@ -6,6 +6,7 @@ import { offsetOf, paged } from "../utils/pagination";
 import { SqlBuilder } from "../utils/sql";
 import type { ClinicBody, SearchClinicsQuery, UpdateClinicBody } from "../validators/clinics";
 import { ensureDoctorProfile } from "./doctors.service";
+import { invalidateDoctorSlots } from "./slotCache.service";
 
 const CLINIC_COLUMNS = `c.id, c.name, c.address_line, c.city, c.state, c.pincode, c.country, c.phone,
   c.timezone, ${LAT_LNG_SQL("c.location")}, c.created_by, c.created_at, c.updated_at`;
@@ -105,6 +106,9 @@ export async function updateClinic(user: AuthUser, id: string, body: UpdateClini
   }
   if (sets.length) {
     await query(`UPDATE app.clinics SET ${sets.join(", ")}, updated_at = now() WHERE id = ${b.param(id)}`, b.params);
+    // A timezone change moves every slot at this clinic.
+    const doctors = await query<{ doctor_id: string }>("SELECT doctor_id FROM app.doctor_clinics WHERE clinic_id = $1", [id]);
+    await invalidateDoctorSlots(...doctors.map((d) => d.doctor_id));
   }
   return getClinic(id);
 }

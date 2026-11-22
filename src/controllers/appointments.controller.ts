@@ -7,6 +7,7 @@ import * as reviews from "../services/reviews.service";
 import { created, ok } from "../utils/respond";
 import type {
   BookAppointmentBody,
+  HoldSlotBody,
   ListAppointmentsQuery,
   RescheduleBody,
   UpdateStatusBody,
@@ -19,6 +20,19 @@ const apptIdOf = (res: Response) => input<{ appointmentId: string }>(res, "param
 export async function book(req: Request, res: Response) {
   const data = await appointments.bookAppointment(currentUser(req), input<BookAppointmentBody>(res, "body"));
   created(res, "Appointment booked", data);
+}
+
+export async function hold(req: Request, res: Response) {
+  created(res, "Slot held", await appointments.holdSlot(currentUser(req), input<HoldSlotBody>(res, "body")));
+}
+
+export async function myHold(req: Request, res: Response) {
+  ok(res, "Current hold fetched", await appointments.getMyHold(currentUser(req)));
+}
+
+export async function releaseHold(req: Request, res: Response) {
+  await appointments.releaseMyHold(currentUser(req), input<{ holdId: string }>(res, "params").holdId);
+  ok(res, "Hold released");
 }
 
 export async function list(req: Request, res: Response) {

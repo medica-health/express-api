@@ -32,10 +32,10 @@ export async function details(req: Request, res: Response) {
   ok(res, "Doctor fetched", await doctors.getDoctorDetails(doctorId, req.user));
 }
 
-export async function slots(_req: Request, res: Response) {
+export async function slots(req: Request, res: Response) {
   const { doctorId } = input<DoctorParam>(res, "params");
   const { date, clinicId } = input<{ date: string; clinicId?: string }>(res, "query");
-  ok(res, "Available slots fetched", await doctors.availableSlots(doctorId, date, clinicId));
+  ok(res, "Available slots fetched", await doctors.availableSlots(doctorId, date, clinicId, req.user));
 }
 
 export async function listReviews(_req: Request, res: Response) {

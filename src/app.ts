@@ -5,6 +5,7 @@ import morgan from "morgan";
 import { env } from "./config/env";
 import { mongoStatus } from "./config/mongo";
 import { postgresStatus } from "./config/postgres";
+import { redisStatus } from "./config/redis";
 import { errorHandler, notFound } from "./middlewares/errorHandler";
 import api from "./routes";
 
@@ -23,11 +24,11 @@ export function createApp() {
   });
 
   app.get("/api/health", async (_req, res) => {
-    const [postgres, mongodb] = await Promise.all([postgresStatus(), mongoStatus()]);
+    const [postgres, mongodb, redis] = await Promise.all([postgresStatus(), mongoStatus(), redisStatus()]);
     res.status(200).json({
       success: true,
       message: "API is running successfully",
-      data: { environment: env.NODE_ENV, databases: { postgres, mongodb } },
+      data: { environment: env.NODE_ENV, databases: { postgres, mongodb, redis } },
       timestamp: new Date().toISOString(),
     });
   });

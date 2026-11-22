@@ -1,4 +1,3 @@
-import type { PoolClient } from "pg";
 import { pool } from "../config/postgres";
 import { query, queryOne, withTransaction, type Queryable } from "../db";
 import { canViewAppointment } from "../policies/access";
@@ -16,13 +15,16 @@ import { SqlBuilder } from "../utils/sql";
 import type {
   BookAppointmentBody,
   ListAppointmentsQuery,
+  HoldSlotBody,
   RescheduleBody,
   UpdateStatusBody,
 } from "../validators/appointments";
 import { assertCanManageDoctor, assignedDoctorIds, isAssignedReceptionist } from "./access.service";
 import { audit } from "./audit.service";
-import { candidateSlots } from "./doctors.service";
+import { busyIntervals, candidateSlots } from "./doctors.service";
 import { notifyBooked, notifyCancelled, notifyRescheduled } from "./notifications.service";
+import { invalidateDoctorSlots } from "./slotCache.service";
+import { assertNotHeldByOthers, createHold, getHold, releaseHold } from "./slotHolds.service";
 import { requireUserWithRole } from "./users.service";
 
 interface AppointmentRow {
@@ -85,7 +87,7 @@ export async function getAppointment(user: AuthUser, id: string) {
  * is in the future and doesn't fall in time off. Overlap with other appointments is
  * enforced by the appointments_doctor_no_overlap exclusion constraint (-> 409).
  */
-async function resolveSlot(tx: PoolClient, doctorId: string, clinicId: string, startAt: Date) {
+async function resolveSlot(tx: Queryable, doctorId: string, clinicId: string, startAt: Date) {
   if (startAt.getTime() <= Date.now()) throw AppError.badRequest("The appointment time must be in the future");
 
   const clinic = await queryOne<{ local_date: string }>(
@@ -111,6 +113,51 @@ async function resolveSlot(tx: PoolClient, doctorId: string, clinicId: string, s
   return slot;
 }
 
+async function assertBookableDoctor(doctorId: string, db: Queryable) {
+  const doctor = await queryOne<{ verification_status: string; enabled: boolean }>(
+    `SELECT dp.verification_status, u.enabled FROM app.doctor_profiles dp
+       JOIN auth.users u ON u.id = dp.user_id WHERE dp.user_id = $1`,
+    [doctorId],
+    db,
+  );
+  if (!doctor || !doctor.enabled || doctor.verification_status !== "APPROVED") {
+    throw AppError.notFound("Doctor not found");
+  }
+}
+
+/** After a booking or reschedule commits: drop the booker's hold on that slot and the slot cache. */
+async function afterSlotTaken(user: AuthUser, doctorId: string, startAt: Date) {
+  const hold = await getHold(user.id).catch(() => null);
+  if (hold && hold.doctorId === doctorId && hold.startAt.getTime() === startAt.getTime()) {
+    await releaseHold(user.id, hold.holdId);
+  }
+  await invalidateDoctorSlots(doctorId);
+}
+
+// ------------------------------------------------------------------ slot holds (Redis)
+
+/**
+ * Holds a free slot for the caller while they confirm the booking (see slotHolds.service).
+ * Same rules as booking: patients for themselves, receptionists for assigned doctors, admins any.
+ * 503 when Redis is unavailable; the client should then book directly.
+ */
+export async function holdSlot(user: AuthUser, body: HoldSlotBody) {
+  if (user.role === "RECEPTIONIST") await assertCanManageDoctor(user, body.doctorId);
+  await assertBookableDoctor(body.doctorId, pool);
+  const slot = await resolveSlot(pool, body.doctorId, body.clinicId, body.startAt);
+  const busy = await busyIntervals(body.doctorId, slot.startAt, slot.endAt);
+  if (busy.length) throw AppError.conflict("This time slot is no longer available");
+  return createHold(user.id, body.doctorId, body.clinicId, slot);
+}
+
+export async function getMyHold(user: AuthUser) {
+  return getHold(user.id);
+}
+
+export async function releaseMyHold(user: AuthUser, holdId: string) {
+  if (!(await releaseHold(user.id, holdId))) throw AppError.notFound("Hold not found or already expired");
+}
+
 export async function bookAppointment(user: AuthUser, body: BookAppointmentBody) {
   let patientId: string;
   if (user.role === "PATIENT") {
@@ -121,19 +168,11 @@ export async function bookAppointment(user: AuthUser, body: BookAppointmentBody)
     if (user.role === "RECEPTIONIST") await assertCanManageDoctor(user, body.doctorId);
   }
 
-  const id = await withTransaction(async (tx) => {
+  const { id, startAt } = await withTransaction(async (tx) => {
     await requireUserWithRole(patientId, "PATIENT", tx);
-    const doctor = await queryOne<{ verification_status: string; enabled: boolean }>(
-      `SELECT dp.verification_status, u.enabled FROM app.doctor_profiles dp
-         JOIN auth.users u ON u.id = dp.user_id WHERE dp.user_id = $1`,
-      [body.doctorId],
-      tx,
-    );
-    if (!doctor || !doctor.enabled || doctor.verification_status !== "APPROVED") {
-      throw AppError.notFound("Doctor not found");
-    }
-
+    await assertBookableDoctor(body.doctorId, tx);
     const slot = await resolveSlot(tx, body.doctorId, body.clinicId, body.startAt);
+    await assertNotHeldByOthers(body.doctorId, slot, user.id);
     await query(
       "INSERT INTO app.patient_profiles (user_id) VALUES ($1) ON CONFLICT (user_id) DO NOTHING",
       [patientId],
@@ -145,8 +184,10 @@ export async function bookAppointment(user: AuthUser, body: BookAppointmentBody)
       [patientId, body.doctorId, body.clinicId, user.id, slot.startAt, slot.endAt, body.reason ?? null],
       tx,
     );
-    return row!.id;
+    return { id: row!.id, startAt: slot.startAt };
   });
+
+  await afterSlotTaken(user, body.doctorId, startAt);
 
   audit(user, "APPOINTMENT_BOOKED", "appointment", id, { doctorId: body.doctorId, patientId });
   notifyBooked(id);
@@ -197,7 +238,7 @@ export async function listAppointments(user: AuthUser, q: ListAppointmentsQuery)
 }
 
 export async function updateStatus(user: AuthUser, id: string, body: UpdateStatusBody) {
-  await withTransaction(async (tx) => {
+  const doctorId = await withTransaction(async (tx) => {
     const appt = await loadVisible(user, id, tx, true);
     await assertCanManageDoctor(user, appt.doctor_id, tx);
     assertTransition({ from: appt.status, to: body.status, role: user.role, startAt: appt.start_at });
@@ -211,13 +252,15 @@ export async function updateStatus(user: AuthUser, id: string, body: UpdateStatu
       notes ? [id, body.status, body.doctorNotes] : [id, body.status],
       tx,
     );
+    return appt.doctor_id;
   });
+  if (body.status === "NO_SHOW") await invalidateDoctorSlots(doctorId); // frees the slot
   audit(user, `APPOINTMENT_${body.status}`, "appointment", id);
   return detail(id, user);
 }
 
 export async function cancelAppointment(user: AuthUser, id: string, reason?: string) {
-  await withTransaction(async (tx) => {
+  const doctorId = await withTransaction(async (tx) => {
     const appt = await loadVisible(user, id, tx, true);
     if (user.role !== "PATIENT") await assertCanManageDoctor(user, appt.doctor_id, tx);
     assertTransition({ from: appt.status, to: "CANCELLED", role: user.role, startAt: appt.start_at });
@@ -228,14 +271,16 @@ export async function cancelAppointment(user: AuthUser, id: string, reason?: str
       [id, reason ?? null, user.id],
       tx,
     );
+    return appt.doctor_id;
   });
+  await invalidateDoctorSlots(doctorId);
   audit(user, "APPOINTMENT_CANCELLED", "appointment", id, { reason });
   notifyCancelled(id);
   return detail(id, user);
 }
 
 export async function rescheduleAppointment(user: AuthUser, id: string, body: RescheduleBody) {
-  await withTransaction(async (tx) => {
+  const { doctorId, startAt } = await withTransaction(async (tx) => {
     const appt = await loadVisible(user, id, tx, true);
     if (user.role === "PATIENT") assertPatientCanChange(appt.start_at);
     else await assertCanManageDoctor(user, appt.doctor_id, tx);
@@ -243,6 +288,7 @@ export async function rescheduleAppointment(user: AuthUser, id: string, body: Re
 
     const clinicId = body.clinicId ?? appt.clinic_id;
     const slot = await resolveSlot(tx, appt.doctor_id, clinicId, body.startAt);
+    await assertNotHeldByOthers(appt.doctor_id, slot, user.id);
     // Moving resets confirmation and the reminder; the exclusion constraint rejects overlaps.
     await query(
       `UPDATE app.appointments
@@ -251,7 +297,9 @@ export async function rescheduleAppointment(user: AuthUser, id: string, body: Re
       [id, slot.startAt, slot.endAt, clinicId],
       tx,
     );
+    return { doctorId: appt.doctor_id, startAt: slot.startAt };
   });
+  await afterSlotTaken(user, doctorId, startAt);
   audit(user, "APPOINTMENT_RESCHEDULED", "appointment", id, { startAt: body.startAt });
   notifyRescheduled(id);
   return detail(id, user);

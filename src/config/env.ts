@@ -20,6 +20,17 @@ const schema = z.object({
   MAIL_REPLY_TO: z.string().optional().default(""),
   APP_BASE_URL: z.string().default("http://localhost:3000"),
 
+  // Redis (optional): slot holds, free-slot cache, rate limiting. Empty = those features are off.
+  REDIS_URL: z.string().optional().default(""),
+  // How long a patient can hold a slot while confirming the booking.
+  SLOT_HOLD_TTL_SECONDS: z.coerce.number().int().min(30).max(900).default(300),
+  // Free-slot cache lifetime. Writes invalidate it immediately; the TTL is a safety net.
+  SLOT_CACHE_TTL_SECONDS: z.coerce.number().int().min(5).max(3600).default(60),
+  RATE_LIMIT_ENABLED: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
+
   // Background jobs (reminder emails). Disable in tests or extra replicas if desired.
   JOBS_ENABLED: z
     .enum(["true", "false"])

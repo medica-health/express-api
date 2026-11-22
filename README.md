@@ -7,6 +7,7 @@ Domain API for the MediCare online doctor appointment system: doctor discovery (
 - **Data:**
   - **PostgreSQL + PostGIS** is the main database. This service owns the `app` schema and only reads `auth.users`, which `spring-api` owns.
   - **MongoDB** stores medical-record files (GridFS bucket `medical_records`) and the `audit_logs` collection.
+- **Redis** (optional): slot holds, the free-slot cache and rate limiting. See [Slot booking and Redis](#slot-booking-and-redis).
 - **Email:** sent via **Resend** (`resend` SDK) for bookings, cancellations, reschedules, doctor verification and 24-hour reminders. Reminders use Resend idempotency keys, rate-limit errors are retried with backoff, and every attempt is logged in `app.notifications_log` with the Resend message id. Without `RESEND_API_KEY`, emails are only logged (status `SKIPPED`).
 
 ## Running locally
@@ -31,7 +32,7 @@ The migrations reference `auth.users`, so **spring-api must have run its Flyway 
 |---|---|
 | `bun run dev` | Watch mode |
 | `bun run lint` / `bun run typecheck` | ESLint / TS 7 (`@typescript/native`) |
-| `bun test` | Unit and HTTP tests. They need no database. |
+| `bun test` | Unit and HTTP tests. They need no database. Set `TEST_REDIS_URL=redis://localhost:6379/15` to also run the Redis tests against a real (disposable) Redis; CI does. |
 | `bun run migrate` | Apply migrations and exit |
 | `bun run seed` | **Dev only.** Loads demo users, clinics in Pune, Mumbai, Delhi and Bengaluru, doctors and availability. Every demo password is `Password@123`. |
 | `bun run token -- --email doctor1@demo.local` | **Dev only.** Mints an access token for a seeded user, the way spring-api will |
@@ -61,6 +62,23 @@ The `role` claim is one of `PATIENT`, `DOCTOR`, `RECEPTIONIST` or `ADMIN`. Acces
 
 **Double booking** is prevented in the database by exclusion constraints on `tstzrange(start_at, end_at)`, per doctor and per patient. A conflict returns `409`.
 
+## Slot booking and Redis
+
+Booking flow for the client:
+1. `GET /api/doctors/:id/slots?date=` lists free slots. Each has `held` and `heldUntil`. A slot is `held` while another user is holding it; your own hold is not flagged.
+2. `POST /api/appointments/holds { doctorId, clinicId, startAt }` holds the picked slot for `SLOT_HOLD_TTL_SECONDS` (default 5 min) and returns `{ holdId, expiresAt }`. Show a countdown.
+   - `409` (with `heldUntil`): someone else holds it, or it was just booked. Pick another slot.
+   - `503`: Redis is unavailable. Skip the hold and book directly.
+3. `POST /api/appointments` books it. The hold is released automatically. Other users get `409` while the slot is held.
+4. `DELETE /api/appointments/holds/:holdId` releases the hold if the user backs out. `GET /api/appointments/holds/me` returns the current hold (or `null`), e.g. after a page reload.
+
+How it works (`services/slotHolds.service.ts`, `slotCache.service.ts`, `middlewares/rateLimit.ts`):
+- **Holds** live in a sorted set per doctor and are created by a Lua script, so checking and holding is one atomic step: of many users racing for a slot, exactly one gets it. Holds compare time ranges, not start times, and expire on Redis' clock. Each user holds **one slot at a time**; holding another releases the previous one, so nobody can hoard a calendar. Patients, receptionists (assigned doctors) and admins can hold, the same as booking.
+- **Free-slot cache**, per doctor, date and clinic, with a `SLOT_CACHE_TTL_SECONDS` (default 60 s) TTL. Every change that affects a doctor's free slots bumps that doctor's cache version after it commits: booking, cancel, reschedule, no-show, availability, time off, clinic links and clinic timezone changes. A version read before the Postgres query means a concurrent write can't leave a stale entry behind.
+- **Rate limits** per user, shared across replicas: holds 30/min, bookings 20/min, cancel and reschedule 20/min. Responses carry `RateLimit-*` headers; over the limit returns `429` with `Retry-After`.
+- **Redis is never the source of truth.** Postgres still checks the exact slot and its exclusion constraints still block overlaps. If Redis is down or `REDIS_URL` is empty, slots are read straight from Postgres, rate limits are skipped, holds return `503`, and booking keeps working. `/api/health` reports `redis` as `up`, `down` or `disabled`.
+- The hold scripts touch keys of two doctors (when a user moves their hold), so use a **single-node** Redis (ElastiCache with cluster mode off), not Redis Cluster.
+
 ## API
 
 Every response uses the envelope `{ success, message, data, timestamp }`. Send authenticated requests with `Authorization: Bearer <token>`. In paths, `me` stands for the caller.
@@ -77,6 +95,7 @@ Every response uses the envelope `{ success, message, data, timestamp }`. Send a
 | `POST /api/clinics`, `PATCH /api/clinics/:id` | doctor (own) / admin |
 | `DELETE /api/clinics/:id` | admin |
 | `GET /api/specializations` | public |
+| `POST /api/appointments/holds`, `GET /holds/me`, `DELETE /holds/:holdId` | patient / receptionist / admin |
 | `POST /api/appointments` | patient / receptionist / admin |
 | `GET /api/appointments?status&from&to&doctorId&patientId&clinicId`, `GET /api/appointments/:id` | all (scoped) |
 | `PATCH /api/appointments/:id/status`, `POST /:id/cancel`, `POST /:id/reschedule` | per status flow |
@@ -97,9 +116,9 @@ Every response uses the envelope `{ success, message, data, timestamp }`. Send a
 ```
 src/
   app.ts, server.ts         app factory (used by tests) / process entry
-  config/                   env (zod-validated), postgres pool, mongo
+  config/                   env (zod-validated), postgres pool, mongo, redis (optional)
   db/                       query helpers, withTransaction, migration runner, migrations/*.sql
-  middlewares/              authenticate, requireRole, validate, errorHandler
+  middlewares/              authenticate, requireRole, validate, rateLimit, errorHandler
   policies/                 pure rules: status machine, access, slot filtering
   validators/               zod schemas per module
   routes/ → controllers/ → services/

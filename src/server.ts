@@ -3,11 +3,12 @@ import { createApp } from "./app";
 import { env } from "./config/env";
 import { connectMongo, disconnectMongo } from "./config/mongo";
 import { connectPostgres, disconnectPostgres } from "./config/postgres";
+import { connectRedis, disconnectRedis } from "./config/redis";
 import { runMigrations } from "./db/migrate";
 import { startJobs, stopJobs } from "./jobs/reminders";
 
 async function start() {
-  await Promise.all([connectMongo(), connectPostgres()]);
+  await Promise.all([connectMongo(), connectPostgres(), connectRedis()]);
 
   // Migrations need Postgres and spring-api's auth schema. A failure is logged rather than
   // fatal, matching the existing "DB down is not fatal" behaviour; /api/health shows DB state.
@@ -27,7 +28,7 @@ async function start() {
   const shutdown = async () => {
     stopJobs();
     server.close();
-    await Promise.allSettled([disconnectMongo(), disconnectPostgres()]);
+    await Promise.allSettled([disconnectMongo(), disconnectPostgres(), disconnectRedis()]);
     process.exit(0);
   };
   process.on("SIGINT", shutdown);

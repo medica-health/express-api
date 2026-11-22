@@ -29,7 +29,7 @@ router.put("/me/profile", authenticate, requireRole("DOCTOR"), validate({ body: 
 // ---- public discovery (a token is optional; patients get their saved location as the default)
 router.get("/", optionalAuthenticate, validate({ query: searchDoctorsQuery }), c.search);
 router.get("/:doctorId", optionalAuthenticate, validate({ params: publicDoctorParam }), c.details);
-router.get("/:doctorId/slots", validate({ params: publicDoctorParam, query: slotsQuery }), c.slots);
+router.get("/:doctorId/slots", optionalAuthenticate, validate({ params: publicDoctorParam, query: slotsQuery }), c.slots);
 router.get("/:doctorId/reviews", validate({ params: publicDoctorParam, query: paginationSchema }), c.listReviews);
 
 // ---- schedule management (doctor: own via "me" or their id; receptionist: assigned doctors; admin: any)
