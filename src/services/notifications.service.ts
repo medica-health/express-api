@@ -1,6 +1,6 @@
 import { queryOne } from "../db";
 import { isPhonePlaceholder } from "../utils/phonePatient";
-import { layout, sendMail, type LogEntry } from "./mailer.service";
+import { layout, sendMail, type DeliveryResult, type LogEntry } from "./mailer.service";
 import { sendSms } from "./sms.service";
 
 // Appointment-related emails. Each function loads what it needs and is safe to call
@@ -58,10 +58,18 @@ export interface NotifyOptions {
   deps?: { load?: typeof loadAppointment; log?: (e: LogEntry) => Promise<void> };
 }
 
-export async function notify(appointmentId: string, event: Event, opts: NotifyOptions = {}): Promise<void> {
+/**
+ * Sends the patient (and, unless patientOnly or a reminder, the doctor) notification.
+ * Resolves with the patient delivery status, or null when the appointment wasn't found.
+ */
+export async function notify(
+  appointmentId: string,
+  event: Event,
+  opts: NotifyOptions = {},
+): Promise<DeliveryResult["status"] | null> {
   const { load = loadAppointment, log } = opts.deps ?? {};
   const a = await load(appointmentId);
-  if (!a) return;
+  if (!a) return null;
   const when = formatWhen(a.start_at, a.timezone);
   const where = `${a.clinic_name}, ${a.clinic_address}`;
 
@@ -132,10 +140,11 @@ export async function notify(appointmentId: string, event: Event, opts: NotifyOp
       ),
     );
   }
-  await Promise.all(jobs);
+  const [patient] = await Promise.all(jobs);
+  return patient!.status;
 }
 
-function fireAndForget(p: Promise<void>) {
+function fireAndForget(p: Promise<unknown>) {
   p.catch((err: Error) => console.error("Notification failed:", err.message));
 }
 

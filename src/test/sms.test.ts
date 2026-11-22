@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test";
-import { deliverSms, type Sms } from "../services/sms.service";
+import { deliverSms, maskPhone, smsConfigWarning, type Sms } from "../services/sms.service";
 
 const realFetch = globalThis.fetch;
 beforeEach(() => {
@@ -73,5 +73,52 @@ describe("deliverSms (Twilio)", () => {
       env.TWILIO_ACCOUNT_SID = saved.sid;
       env.TWILIO_AUTH_TOKEN = saved.token;
     }
+  });
+});
+
+describe("phone masking in logs", () => {
+  test("keeps +91 and the last 4 digits", () => {
+    expect(maskPhone("+919876543210")).toBe("+91******3210");
+    expect(maskPhone("+15005550006")).toBe("+*******0006");
+    expect(maskPhone("")).toBe("");
+  });
+
+  test("a failed SMS logs the masked number only", async () => {
+    stubFetch({ status: 400, body: { code: 21211, message: "Invalid 'To' Phone Number" } });
+    const err = spyOn(console, "error").mockImplementation(() => {});
+    await deliverSms(sms);
+    const logged = err.mock.calls.map((c) => c.join(" ")).join(" | ");
+    expect(logged).toContain("+91******3210");
+    expect(logged).not.toContain("9876543210");
+  });
+
+  test("a skipped SMS logs the masked number only", async () => {
+    const { env } = await import("../config/env");
+    const saved = { sid: env.TWILIO_ACCOUNT_SID, token: env.TWILIO_AUTH_TOKEN };
+    env.TWILIO_ACCOUNT_SID = "";
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await deliverSms(sms);
+      const logged = log.mock.calls.map((c) => c.join(" ")).join(" | ");
+      expect(logged).toContain("+91******3210");
+      expect(logged).not.toContain("9876543210");
+    } finally {
+      env.TWILIO_ACCOUNT_SID = saved.sid;
+      env.TWILIO_AUTH_TOKEN = saved.token;
+    }
+  });
+});
+
+describe("smsConfigWarning", () => {
+  const base = { TWILIO_ACCOUNT_SID: "AC1", TWILIO_AUTH_TOKEN: "t", TWILIO_SMS_FROM: "", TWILIO_MESSAGING_SERVICE_SID: "" };
+
+  test("warns when credentials are set without a sender", () => {
+    expect(smsConfigWarning(base)).toContain("TWILIO_SMS_FROM");
+  });
+
+  test("quiet when a sender is set or Twilio is off", () => {
+    expect(smsConfigWarning({ ...base, TWILIO_SMS_FROM: "+15005550006" })).toBeNull();
+    expect(smsConfigWarning({ ...base, TWILIO_MESSAGING_SERVICE_SID: "MG1" })).toBeNull();
+    expect(smsConfigWarning({ ...base, TWILIO_ACCOUNT_SID: "" })).toBeNull();
   });
 });

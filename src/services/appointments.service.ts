@@ -319,9 +319,11 @@ export async function resendConfirmation(
   if (user.role !== "PATIENT") await assertCanManageDoctor(user, appt.doctor_id, db);
   if (!isActive(appt.status)) throw AppError.conflict("Only upcoming appointments can be re-confirmed");
   // Notification problems must never fail the request: report them via `sent` instead.
-  let sent = true;
+  // `sent` is true only when the patient's email/SMS was actually delivered to the provider
+  // (not FAILED, not SKIPPED for missing credentials or phone, not a missing appointment).
+  let sent: boolean;
   try {
-    await send(id, "BOOKED", { patientOnly: true });
+    sent = (await send(id, "BOOKED", { patientOnly: true })) === "SENT";
   } catch (err) {
     sent = false;
     console.error("Resend confirmation failed:", (err as Error).message);

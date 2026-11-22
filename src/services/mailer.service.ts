@@ -102,8 +102,9 @@ export async function insertNotificationLog(e: LogEntry): Promise<void> {
 // Sends and records the outcome in app.notifications_log. Never throws:
 // notification problems must not fail the request that triggered them.
 // Phone-registered patients have a placeholder address that can't receive mail: record, don't send.
+// Returns the delivery result so callers can tell SENT from FAILED/SKIPPED.
 // `log` is injectable so tests don't need a database.
-export async function sendMail(mail: Mail, log: (e: LogEntry) => Promise<void> = insertNotificationLog): Promise<void> {
+export async function sendMail(mail: Mail, log: (e: LogEntry) => Promise<void> = insertNotificationLog): Promise<DeliveryResult> {
   const result: DeliveryResult = isPhonePlaceholder(mail.to)
     ? { status: "SKIPPED", providerMessageId: null, error: "placeholder address" }
     : await deliver(mail);
@@ -116,6 +117,7 @@ export async function sendMail(mail: Mail, log: (e: LogEntry) => Promise<void> =
     subject: mail.subject,
     result,
   });
+  return result;
 }
 
 const escape = (s: string) =>
