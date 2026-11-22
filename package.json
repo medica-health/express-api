@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "bun --watch src/server.ts",
-    "build": "tsc",
+    "build": "bun node_modules/@typescript/native/bin/tsc",
     "start": "bun dist/server.js",
     "docker:build": "docker build -t express-api .",
     "docker:run": "docker run -p 3000:3000 express-api",
@@ -13,7 +13,7 @@
     "docker:compose:build": "docker-compose build",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "bun node_modules/@typescript/native/bin/tsc --noEmit"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -23,13 +23,12 @@
     "@types/morgan": "^1.9.10",
     "@types/node": "^26.6.6",
     "@types/pg": "^8.23.1",
+    "@typescript/native": "npm:typescript@^7.0.2",
     "eslint": "^10.14.0",
     "globals": "^17.14.0",
     "nodemon": "^3.1.14",
+    "typescript": "^6.0.3",
     "typescript-eslint": "^8.72.1"
-  },
-  "peerDependencies": {
-    "typescript": "^7.0.2"
   },
   "dependencies": {
     "cors": "^2.8.6",
