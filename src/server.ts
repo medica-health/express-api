@@ -6,8 +6,12 @@ import { connectPostgres, disconnectPostgres } from "./config/postgres";
 import { connectRedis, disconnectRedis } from "./config/redis";
 import { runMigrations } from "./db/migrate";
 import { startJobs, stopJobs } from "./jobs/reminders";
+import { smsConfigWarning } from "./services/sms.service";
 
 async function start() {
+  const smsWarning = smsConfigWarning();
+  if (smsWarning) console.warn(smsWarning);
+
   await Promise.all([connectMongo(), connectPostgres(), connectRedis()]);
 
   // Migrations need Postgres and spring-api's auth schema. A failure is logged rather than

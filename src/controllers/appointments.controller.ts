@@ -58,6 +58,11 @@ export async function reschedule(req: Request, res: Response) {
   ok(res, "Appointment rescheduled", data);
 }
 
+export async function resendConfirmation(req: Request, res: Response) {
+  const data = await appointments.resendConfirmation(currentUser(req), idOf(res));
+  ok(res, data.sent ? "Confirmation resent" : "Confirmation could not be sent right now", data);
+}
+
 export async function writePrescription(req: Request, res: Response) {
   const data = await prescriptions.upsertPrescription(currentUser(req), apptIdOf(res), input<PrescriptionBody>(res, "body"));
   ok(res, "Prescription saved", data);

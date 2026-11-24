@@ -1,5 +1,7 @@
 import { queryOne } from "../db";
-import { layout, sendMail } from "./mailer.service";
+import { isPhonePlaceholder } from "../utils/phonePatient";
+import { layout, sendMail, type DeliveryResult, type LogEntry } from "./mailer.service";
+import { sendSms } from "./sms.service";
 
 // Appointment-related emails. Each function loads what it needs and is safe to call
 // without awaiting (errors are caught and logged).
@@ -13,17 +15,18 @@ interface ApptMailRow {
   patient_id: string;
   patient_name: string;
   patient_email: string;
+  patient_phone: string | null;
   doctor_id: string;
   doctor_name: string;
   doctor_email: string;
   cancel_reason: string | null;
 }
 
-async function loadAppointment(id: string): Promise<ApptMailRow | undefined> {
+export async function loadAppointment(id: string): Promise<ApptMailRow | undefined> {
   return queryOne<ApptMailRow>(
     `SELECT a.id, a.start_at, c.timezone, c.name AS clinic_name,
             c.address_line || ', ' || c.city AS clinic_address,
-            p.id AS patient_id, p.full_name AS patient_name, p.email::text AS patient_email,
+            p.id AS patient_id, p.full_name AS patient_name, p.email::text AS patient_email, p.phone AS patient_phone,
             d.id AS doctor_id, d.full_name AS doctor_name, d.email::text AS doctor_email,
             a.cancel_reason
        FROM app.appointments a
@@ -48,9 +51,25 @@ const SUBJECTS: Record<Event, string> = {
   REMINDER: "Reminder: your upcoming appointment",
 };
 
-async function notify(appointmentId: string, event: Event): Promise<void> {
-  const a = await loadAppointment(appointmentId);
-  if (!a) return;
+export interface NotifyOptions {
+  /** Skip the doctor email (e.g. when the receptionist booked on the doctor's behalf). */
+  patientOnly?: boolean;
+  /** Injectable for tests; default to the database. */
+  deps?: { load?: typeof loadAppointment; log?: (e: LogEntry) => Promise<void> };
+}
+
+/**
+ * Sends the patient (and, unless patientOnly or a reminder, the doctor) notification.
+ * Resolves with the patient delivery status, or null when the appointment wasn't found.
+ */
+export async function notify(
+  appointmentId: string,
+  event: Event,
+  opts: NotifyOptions = {},
+): Promise<DeliveryResult["status"] | null> {
+  const { load = loadAppointment, log } = opts.deps ?? {};
+  const a = await load(appointmentId);
+  if (!a) return null;
   const when = formatWhen(a.start_at, a.timezone);
   const where = `${a.clinic_name}, ${a.clinic_address}`;
 
@@ -67,39 +86,65 @@ async function notify(appointmentId: string, event: Event): Promise<void> {
 
   const subject = SUBJECTS[event];
   const lines = patientLines[event];
-  const jobs = [
-    sendMail({
-      to: a.patient_email,
-      subject,
-      html: layout(subject, lines, { label: "View appointment", path: `/patient/appointments/${a.id}` }),
-      text: lines.join("\n"),
-      type: `APPOINTMENT_${event}`,
-      userId: a.patient_id,
-      appointmentId: a.id,
-      // One reminder per appointment time, even if the sweep is retried or races another pod.
-      ...(event === "REMINDER" ? { idempotencyKey: `reminder/${a.id}/${a.start_at.getTime()}` } : {}),
-    }),
-  ];
+
+  // Phone-registered patients (placeholder email) are reached by SMS; everyone else by email.
+  const smsBody: Record<Event, string> = {
+    BOOKED: `MediCare: Appointment with Dr. ${a.doctor_name} on ${when} at ${a.clinic_name} is booked.`,
+    RESCHEDULED: `MediCare: Appointment with Dr. ${a.doctor_name} has moved to ${when} at ${a.clinic_name}.`,
+    CANCELLED: `MediCare: Appointment with Dr. ${a.doctor_name} on ${when} is cancelled.`,
+    REMINDER: `MediCare: Reminder: Appointment with Dr. ${a.doctor_name} on ${when} at ${a.clinic_name}.`,
+  };
+  const patientJob = isPhonePlaceholder(a.patient_email)
+    ? sendSms(
+        {
+          to: a.patient_phone ?? "",
+          body: smsBody[event],
+          type: `APPOINTMENT_${event}`,
+          subject,
+          userId: a.patient_id,
+          appointmentId: a.id,
+        },
+        log,
+      )
+    : sendMail(
+        {
+          to: a.patient_email,
+          subject,
+          html: layout(subject, lines, { label: "View appointment", path: `/patient/appointments/${a.id}` }),
+          text: lines.join("\n"),
+          type: `APPOINTMENT_${event}`,
+          userId: a.patient_id,
+          appointmentId: a.id,
+          // One reminder per appointment time, even if the sweep is retried or races another pod.
+          ...(event === "REMINDER" ? { idempotencyKey: `reminder/${a.id}/${a.start_at.getTime()}` } : {}),
+        },
+        log,
+      );
+  const jobs = [patientJob];
 
   // Doctors hear about new, moved and cancelled bookings (not reminders).
-  if (event !== "REMINDER") {
+  if (event !== "REMINDER" && !opts.patientOnly) {
     const doctorLines = [`Dr. ${a.doctor_name},`, `${a.patient_name}'s appointment on ${when} was ${event.toLowerCase()}.`];
     jobs.push(
-      sendMail({
-        to: a.doctor_email,
-        subject: `${subject}: ${a.patient_name}`,
-        html: layout(subject, doctorLines, { label: "Open schedule", path: `/doctor/appointments/${a.id}` }),
-        text: doctorLines.join("\n"),
-        type: `APPOINTMENT_${event}_DOCTOR`,
-        userId: a.doctor_id,
-        appointmentId: a.id,
-      }),
+      sendMail(
+        {
+          to: a.doctor_email,
+          subject: `${subject}: ${a.patient_name}`,
+          html: layout(subject, doctorLines, { label: "Open schedule", path: `/doctor/appointments/${a.id}` }),
+          text: doctorLines.join("\n"),
+          type: `APPOINTMENT_${event}_DOCTOR`,
+          userId: a.doctor_id,
+          appointmentId: a.id,
+        },
+        log,
+      ),
     );
   }
-  await Promise.all(jobs);
+  const [patient] = await Promise.all(jobs);
+  return patient!.status;
 }
 
-function fireAndForget(p: Promise<void>) {
+function fireAndForget(p: Promise<unknown>) {
   p.catch((err: Error) => console.error("Notification failed:", err.message));
 }
 

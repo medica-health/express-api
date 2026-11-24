@@ -117,6 +117,29 @@ describe("role gates", () => {
     expect(status).toBe(403);
   });
 
+  test("resend-confirmation requires auth", async () => {
+    const { status } = await call("/api/appointments/00000000-0000-4000-8000-000000000009/resend-confirmation", {
+      method: "POST",
+    });
+    expect(status).toBe(401);
+  });
+
+  test("doctors cannot resend confirmations", async () => {
+    const { status } = await call("/api/appointments/00000000-0000-4000-8000-000000000009/resend-confirmation", {
+      method: "POST",
+      bearer: await token("DOCTOR"),
+    });
+    expect(status).toBe(403);
+  });
+
+  test("resend-confirmation rejects an invalid id", async () => {
+    const { status } = await call("/api/appointments/not-a-uuid/resend-confirmation", {
+      method: "POST",
+      bearer: await token("PATIENT"),
+    });
+    expect(status).toBe(400);
+  });
+
   test("receptionists cannot read clinical records", async () => {
     expect((await call("/api/medical-records", { bearer: await token("RECEPTIONIST") })).status).toBe(403);
   });
